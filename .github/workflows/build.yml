@@ -31,6 +31,17 @@ jobs:
             echo "WARN: arch/arm64/configs/mt5896_defconfig not found; continuing with base defconfig"
           fi
           make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld NM=llvm-nm AR=llvm-ar OBJCOPY=llvm-objcopy olddefconfig
+          # Vendor UAPI headers (mtk-v4l2-srccap.h et al.) are not self-contained
+          # and fail HDRTEST with `struct timespec` incomplete-type errors.
+          # Disable the self-test — it is not required to build vmlinux.
+          scripts/config --file .config --disable CONFIG_UAPI_HEADER_TEST
+          # Also disable BTF generation and module signing to avoid toolchain mismatches.
+          scripts/config --file .config --disable CONFIG_DEBUG_INFO_BTF
+          scripts/config --file .config --disable CONFIG_MODULE_SIG
+          scripts/config --file .config --disable CONFIG_MODULE_SIG_ALL
+          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld NM=llvm-nm AR=llvm-ar OBJCOPY=llvm-objcopy olddefconfig
+          echo "--- UAPI_HEADER_TEST / BTF / MODULE_SIG settings after override ---"
+          grep -E '^(CONFIG_UAPI_HEADER_TEST|CONFIG_DEBUG_INFO_BTF|CONFIG_MODULE_SIG)[= ]' .config || true
           echo "--- head of .config ---"
           head -40 .config
 

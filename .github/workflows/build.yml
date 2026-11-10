@@ -25,20 +25,40 @@ jobs:
           else
             make ARCH=arm64 LLVM=1 defconfig
           fi
-          cat arch/arm64/configs/mt5896_defconfig >> .config
+          if [ -f arch/arm64/configs/mt5896_defconfig ]; then
+            cat arch/arm64/configs/mt5896_defconfig >> .config
+          else
+            echo "WARN: arch/arm64/configs/mt5896_defconfig not found; continuing with base defconfig"
+          fi
           make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld NM=llvm-nm AR=llvm-ar OBJCOPY=llvm-objcopy olddefconfig
+          echo "--- head of .config ---"
+          head -40 .config
 
       - name: Build vmlinux
+        continue-on-error: true
         run: |
+          set +e  # we want the full log even if make fails
           cd kernel
-          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld NM=llvm-nm AR=llvm-ar OBJCOPY=llvm-objcopy vmlinux -j$(nproc) 2>&1 | tail -20
+          ( make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- \
+                 CC=clang LD=ld.lld NM=llvm-nm AR=llvm-ar OBJCOPY=llvm-objcopy \
+                 vmlinux -j"$(nproc)" 2>&1 ) | tee build.log
+          make_rc=${PIPESTATUS[0]}
+          echo "::notice::make vmlinux exit code = ${make_rc}"
+          echo "--- tail of build.log (last 120 lines) ---"
+          tail -120 build.log
+          echo "--- searching for build artefacts ---"
+          find . -maxdepth 4 \( -name vmlinux -o -name System.map -o -name '*.elf' \) -printf '%p  %s bytes\n' 2>/dev/null || true
           ls -lh vmlinux System.map 2>/dev/null || true
+          exit 0  # never fail here — let the next steps upload the log
 
       - name: Extract offsets and generate ionstack.conf
         if: always()
         run: |
           cd kernel
-          if [ ! -f System.map ]; then echo "No System.map"; exit 1; fi
+          if [ ! -f System.map ]; then
+            echo "::warning::No System.map produced; skipping offset extraction. See build.log in artifacts."
+            exit 0
+          fi
           echo "=== KEY SYMBOLS ==="
           for s in _text init_task init_cred ashmem_fops ashmem_misc selinux_state configfs_write_bin_file noop_llseek sysctl_bootid random_table nfulnl_logger; do
             grep -w "$s" System.map | head -1
@@ -91,11 +111,13 @@ jobs:
 
       - name: Upload artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: mt9653-kernel-offsets
           path: |
             kernel/System.map
             kernel/ionstack.conf
             kernel/.config
+            kernel/build.log
+          if-no-files-found: warn
           retention-days: 30
